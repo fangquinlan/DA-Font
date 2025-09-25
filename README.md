@@ -2,7 +2,7 @@
 
 Official Pytorch Implementation of **"DA-Font: Few-Shot Font Generation via Dual-Attention Hybrid Integration"** by Weiran Chen, Guiqian Zhu, Ying Li, Yi Ji and Chunping Liu.
 
-Paper can be found at [Arxiv](http://arxiv.org/abs/2509.16632)
+Paper can be found at [Arxiv](http://arxiv.org/abs/2509.16632).
 
 ## Abstract
 
