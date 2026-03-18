@@ -2,7 +2,7 @@
 
 Official Pytorch Implementation of **"DA-Font: Few-Shot Font Generation via Dual-Attention Hybrid Integration"** by Weiran Chen, Guiqian Zhu, Ying Li, Yi Ji and Chunping Liu.
 
-Paper can be found at [Arxiv](http://arxiv.org/abs/2509.16632).
+Paper can be found at [Arxiv](http://arxiv.org/abs/2509.16632) and [ACM](https://dl.acm.org/doi/10.1145/3746027.3755056).
 
 ## Abstract
 
@@ -123,7 +123,7 @@ Our project is inspired and modified by [VQ-Font](https://github.com/awei669/VQ-
     booktitle = {Proceedings of the {ACM} International Conference on Multimedia, {MM}},
     month     = {October},
     year      = {2025},
-    pages     = {xxxx-xxxx}
+    pages     = {6644--6653}
 }
 ```
 
