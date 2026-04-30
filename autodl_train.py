@@ -719,7 +719,7 @@ def write_similarity(content_dir: Path, sim_path: Path, vae_path: Path, args) ->
 def write_config(config_path: Path, prepared_dir: Path, content_dir: Path, args) -> None:
     workers = args.workers
     if workers is None:
-        workers = max(1, min((os.cpu_count() or 2) - 1, 24))
+        workers = max(1, min((os.cpu_count() or 2) // 2, 16))
 
     vae_path = (repo_root() / "pretrained_weights" / "VQ-VAE_Parms_chn_.pth").resolve()
     sim_path = similarity_path(prepared_dir, args)
@@ -767,6 +767,7 @@ print_freq: {args.print_freq}
 val_freq: {args.val_freq}
 save_freq: {args.val_freq}
 tb_freq: {args.tb_freq}
+progress_freq: {args.progress_freq}
 save: last-best
 """
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -839,7 +840,7 @@ def prepare(args) -> tuple[Path, Path]:
 
 
 def configure_runtime(args) -> None:
-    workers = args.workers if args.workers is not None else max(1, min((os.cpu_count() or 2) - 1, 24))
+    workers = args.workers if args.workers is not None else max(1, min((os.cpu_count() or 2) // 2, 16))
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", args.cuda_visible_devices)
     os.environ.setdefault("OMP_NUM_THREADS", str(max(1, workers)))
     os.environ.setdefault("MKL_NUM_THREADS", str(max(1, workers)))
@@ -886,7 +887,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lmdb-map-size-gb", type=float, default=64, help="LMDB map size in GiB. Raise this if LMDB reports MapFullError.")
 
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--workers", type=int, default=None, help="DataLoader workers. Default uses up to 24 CPU workers.")
+    parser.add_argument("--workers", type=int, default=None, help="DataLoader workers. Default uses up to half of CPU cores, capped at 16.")
     parser.add_argument("--prefetch-factor", type=int, default=4)
     parser.add_argument("--iterations", type=int, default=0, help="0 means train indefinitely.")
     parser.add_argument("--kshot", type=int, default=4)
@@ -896,6 +897,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gamma", type=float, default=0.95)
     parser.add_argument("--print-freq", type=int, default=1000)
     parser.add_argument("--val-freq", type=int, default=5000)
+    parser.add_argument("--progress-freq", type=int, default=50, help="Lightweight training heartbeat frequency in steps.")
     parser.add_argument("--tb-freq", type=int, default=100)
     parser.add_argument("--cv-n-unis", type=int, default=20)
     parser.add_argument("--cv-n-fonts", type=int, default=8)

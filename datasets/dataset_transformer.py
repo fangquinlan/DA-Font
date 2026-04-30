@@ -25,7 +25,9 @@ class CombTrainDataset(Dataset):
 
         self.avails = avails  # Available characters per font
         self.unis = sorted(self.all_characters)  # Global sorted unicode list
+        self.uni_to_idx = {uni: idx for idx, uni in enumerate(self.unis)}
         self.fonts = list(self.avails)  # List of font names
+        self.avail_lists = {font: list(unis) for font, unis in self.avails.items()}
         self.n_fonts = len(self.fonts)  # Total number of fonts
         self.n_unis = len(self.unis)  # Total number of unique characters
 
@@ -33,7 +35,7 @@ class CombTrainDataset(Dataset):
         self.transform = transform  # Optional transform for image processing
 
     def random_get_trg(self, avails, font_name):
-        target_list = list(avails[font_name])  # Available characters for given font
+        target_list = self.avail_lists[font_name]  # Available characters for given font
         trg_uni = np.random.choice(target_list, self.num_Positive_samples * 5)  # Randomly select extra characters
         return [str(trg_uni[i]) for i in range(0, self.num_Positive_samples * 5)]  # Return unicode strings
 
@@ -65,7 +67,7 @@ class CombTrainDataset(Dataset):
             trg_imgs = torch.stack([self.env_get(self.env, font_name, uni, self.transform)
                                   for uni in trg_unis], 0)  # Target style images
 
-            trg_uni_ids = [self.unis.index(uni) for uni in trg_unis]  # Get unicode index for targets
+            trg_uni_ids = [self.uni_to_idx[uni] for uni in trg_unis]  # Get unicode index for targets
             font_idx = torch.tensor([font_idx])  # Font index tensor
 
             content_imgs = torch.stack([self.env_get(self.env, self.content_font, uni, self.transform)

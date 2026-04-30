@@ -2,6 +2,7 @@ from .base_trainer import BaseTrainer
 import utils
 from datasets import cyclize
 import torch
+import time
 
 torch.autograd.set_detect_anomaly = True
 
@@ -35,13 +36,16 @@ class CombinedTrainer(BaseTrainer):
         self.logger.info("Start training FewShot ...")
 
         infinite = max_step is None or max_step <= 0
+        data_wait_start = time.time()
 
         while True:
             # Main training loop cycling through the data loader
             for (in_style_ids, in_imgs, trg_style_ids, trg_uni_ids, trg_imgs,
                  content_imgs, trg_unis, style_sample_index, trg_sample_index, ref_unis) in cyclize(loader):
+                batch_start = time.time()
+                data_time = batch_start - data_wait_start
                 epoch = self.step // len(loader)
-                B = trg_imgs.shape[0]  
+                B = trg_imgs.shape[0]
                 stats.updates({
                     "B_style": in_imgs.shape[0],
                     "B_target": B
@@ -140,10 +144,24 @@ class CombinedTrainer(BaseTrainer):
                 self.accum_g()   
 
                 # Logging and validation
-                if self.step % self.cfg['tb_freq'] == 0:    
+                if self.step % self.cfg['tb_freq'] == 0:
                     self.baseplot(losses, discs, stats)
 
-                if self.step % self.cfg['print_freq'] == 0:  
+                progress_freq = self.cfg.get('progress_freq', 0)
+                if progress_freq and self.step % progress_freq == 0:
+                    step_time = time.time() - batch_start
+                    self.logger.info(
+                        "Progress Step {step:7d}: data {data:.3f}s  train {train:.3f}s  max_mem {alloc:.1f}M / {reserved:.1f}M"
+                        .format(
+                            step=self.step,
+                            data=data_time,
+                            train=step_time,
+                            alloc=torch.cuda.max_memory_allocated() / 1000 / 1000,
+                            reserved=torch.cuda.max_memory_reserved() / 1000 / 1000,
+                        )
+                    )
+
+                if self.step % self.cfg['print_freq'] == 0:
                     self.log(losses, discs, stats)
                     self.logger.debug("GPU Memory usage: max mem_alloc = %.1fM / %.1fM",
                                       torch.cuda.max_memory_allocated() / 1000 / 1000,
@@ -163,6 +181,7 @@ class CombinedTrainer(BaseTrainer):
                     break
 
                 self.step += 1
+                data_wait_start = time.time()
 
             if not infinite and self.step >= max_step:
                 break
