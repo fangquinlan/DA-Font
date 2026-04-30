@@ -1,0 +1,8 @@
+prepared_autodl/
+prepared_*/
+results/
+runs/
+*.mdb
+*.log
+__pycache__/
+*.py[cod]

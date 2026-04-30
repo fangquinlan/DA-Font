@@ -48,6 +48,7 @@ class BaseTrainer:
         self.cv_loaders = cv_loaders
 
         self.step = 1  # Training step counter
+        self.best_loss = float("inf")  # Best checkpoint loss for save=last-best
 
         self.g_losses = {}  # Generator loss dictionary
         self.d_losses = {}  # Discriminator loss dictionary
@@ -157,8 +158,9 @@ class BaseTrainer:
 
             self.g_losses["corner"] = corner_loss
         else:
-            self.g_losses["corner"] = 0.0
-        
+            corner_loss = torch.zeros((), device=out.device)
+            self.g_losses["corner"] = corner_loss
+
         return corner_loss
 
 
@@ -332,17 +334,19 @@ class BaseTrainer:
         Save model checkpoint.
 
         Args:
-            method: all / last
+            method: all / last / last-best
                 all: save checkpoint by step
                 last: save checkpoint to 'last.pth'
                 all-last: save checkpoint by step per save_freq and
                           save checkpoint to 'last.pth' always
+                last-best: save only 'latest.pth' and the lowest-loss 'best.pth'
         """
-        if method not in ['all', 'last', 'all-last']:
+        if method not in ['all', 'last', 'all-last', 'last-best']:
             return
-
         step_save = False
         last_save = False
+        if method == 'last-best':
+            last_save = True
         if method == 'all' or (method == 'all-last' and self.step % save_freq == 0):
             step_save = True
         if method == 'last' or method == 'all-last':
@@ -364,6 +368,30 @@ class BaseTrainer:
             save_dic['d_scheduler'] = self.d_scheduler.state_dict()
 
         ckpt_dir = self.cfg['work_dir'] / "checkpoints" / self.cfg['unique_name']
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        if method == 'last-best':
+            latest_ckpt_path = ckpt_dir / "latest.pth"
+            best_ckpt_path = ckpt_dir / "best.pth"
+
+            if self.best_loss == float("inf") and best_ckpt_path.exists():
+                try:
+                    best_ckpt = torch.load(str(best_ckpt_path), map_location="cpu")
+                    self.best_loss = best_ckpt.get("best_loss", best_ckpt.get("loss", self.best_loss))
+                except Exception:
+                    self.best_loss = float("inf")
+
+            torch.save(save_dic, str(latest_ckpt_path))
+            log = "Latest checkpoint is saved to {}".format(latest_ckpt_path)
+
+            if cur_loss < self.best_loss:
+                self.best_loss = cur_loss
+                save_dic['best_loss'] = self.best_loss
+                torch.save(save_dic, str(best_ckpt_path))
+                log += " and best checkpoint is saved to {}".format(best_ckpt_path)
+
+            self.logger.info("{}\n".format(log))
+            return
+
         step_ckpt_name = "{:06d}-{}.pth".format(self.step, self.cfg['name'])
         last_ckpt_name = "last.pth"
         step_ckpt_path = Path.cwd() / ckpt_dir / step_ckpt_name

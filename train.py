@@ -17,7 +17,16 @@ from model.modules import weights_init
 from evaluator import Evaluator
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Set GPU device
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")  # Set GPU device
+
+torch.backends.cudnn.benchmark = True
+if hasattr(torch.backends, "cuda"):
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+try:
+    torch.set_float32_matmul_precision("high")
+except Exception:
+    pass
 
 
 def setup_args_and_config():
@@ -145,14 +154,24 @@ def train(args, cfg, ddp_gpu=0):
     Trainer = CombinedTrainer 
 
     # Create data loaders
+    train_loader_kwargs = dict(
+        num_workers=cfg.n_workers,
+        shuffle=True,
+        drop_last=True,
+        pin_memory=torch.cuda.is_available(),
+    )
+    if cfg.n_workers > 0:
+        train_loader_kwargs.update(
+            persistent_workers=True,
+            prefetch_factor=cfg.get("prefetch_factor", 4),
+        )
+
     trn_dset, trn_loader = get_trn_loader(env,
                                           env_get,
                                           cfg,
                                           data_meta["train"],
                                           trn_transform,
-                                          num_workers=cfg.n_workers,
-                                          shuffle=True,
-                                          drop_last=True)
+                                          **train_loader_kwargs)
 
     cv_loaders = get_cv_loaders(env,
                                 env_get,

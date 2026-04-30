@@ -18,7 +18,8 @@ def save_lmdb(env_path, font_path_char_dict):
     Returns:
         [json]: {font name: [ch1, ch2, ch3, ch4, ....]}
     """
-    env = lmdb.open(env_path, map_size=1024 ** 4)   # Create LMDB database with large enough space
+    map_size_gb = float(os.environ.get("DAFONT_LMDB_MAP_SIZE_GB", "64"))
+    env = lmdb.open(env_path, map_size=int(map_size_gb * (1024 ** 3)))   # Create LMDB database with large enough space
     valid_dict = {}  # Store valid unicode list for each font
 
     for fname in tqdm(font_path_char_dict): 

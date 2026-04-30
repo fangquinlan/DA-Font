@@ -34,6 +34,8 @@ class CombinedTrainer(BaseTrainer):
         self.clear_losses()    
         self.logger.info("Start training FewShot ...")
 
+        infinite = max_step is None or max_step <= 0
+
         while True:
             # Main training loop cycling through the data loader
             for (in_style_ids, in_imgs, trg_style_ids, trg_uni_ids, trg_imgs,
@@ -157,12 +159,12 @@ class CombinedTrainer(BaseTrainer):
                                                  bs_component_embeddings, chars_sim_dict)
                     self.save(loss_dic['g_total'], self.cfg['save'], self.cfg.get('save_freq', self.cfg['val_freq']))
 
-                if self.step >= max_step:  
+                if not infinite and self.step >= max_step:
                     break
 
                 self.step += 1
 
-            if self.step >= max_step:
+            if not infinite and self.step >= max_step:
                 break
 
         self.logger.info("Iteration finished.")
