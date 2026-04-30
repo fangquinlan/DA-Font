@@ -2,17 +2,15 @@ from fontTools.ttLib import TTFont
 from PIL import Image, ImageFont, ImageDraw
 import numpy as np
 import os
-import pygame
-import time
-import sys
-import pandas as pd
-import numpy as np
 import shutil
-from matplotlib import cm
 from collections import Counter
-from PIL import Image
 
-pygame.init()
+try:
+    import pygame
+except ImportError:
+    pygame = None
+else:
+    pygame.init()
 
 
 def get_defined_chars(fontfile):
@@ -65,6 +63,9 @@ def render(font, char, size=(128, 128), pad=20):
 
 def font2image(input_file, output_paths, characters, size):
     """Render multiple characters from font file to images"""
+    if pygame is None:
+        raise ImportError("font2image requires pygame. Install it with `pip install pygame`.")
+
     input_file_name = input_file.split(os.sep)[-1].split('.')[0]
     output_path = os.path.join(output_paths, input_file_name)
 
