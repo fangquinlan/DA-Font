@@ -5,6 +5,7 @@ import utils
 import os
 import tqdm
 import cv2
+import re
 from datasets import cyclize
 from utils import Logger
 from datasets import load_lmdb, read_data_from_lmdb
@@ -38,6 +39,8 @@ class Evaluator:
         self.content_font = content_font  # Font used for content representation
         self.use_half = use_half  # Whether to use half-precision
         self.size = cfg.input_size  # Input image size
+        self.eval_image_dir = Path(cfg.work_dir) / "images" / cfg.unique_name
+        self.eval_image_dir.mkdir(parents=True, exist_ok=True)
 
     
     def cp_validation(self, gen, cv_loaders, step, learned_components, chars_sim_dict, phase="fact", reduction='mean',
@@ -61,6 +64,10 @@ class Evaluator:
                                             reduction=reduction)
         comparable_grid = utils.make_comparable_grid(*compare_batches[::-1], nrow=n_row)
         # self.writer.add_image(tag, comparable_grid, global_step=step)
+        safe_tag = re.sub(r"[^0-9A-Za-z_.-]+", "_", tag).strip("_") or "comparable"
+        image_path = self.eval_image_dir / f"{step:08d}_{safe_tag}.png"
+        utils.save_tensor_to_image(comparable_grid, image_path)
+        self.logger.info("Validation image is saved to {}".format(image_path))
         return comparable_grid
 
 
