@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import unicodedata
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -51,6 +52,7 @@ REGION_SOURCE_FONTS = {
 }
 DEFAULT_REGION_ORDER = ("HK", "JP", "KR", "SC", "TC")
 UNSAFE_FILENAME_CHARS = set('/\\:*?"<>|')
+_PIL_FONT_CACHE: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
 
 
 @dataclass
@@ -65,11 +67,11 @@ class StyleSource:
 
 
 class Progress:
-    def __init__(self, iterable: Iterable, desc: str):
+    def __init__(self, iterable: Iterable, desc: str, total: int | None = None):
         try:
             from tqdm import tqdm
 
-            self.iterable = tqdm(iterable, desc=desc)
+            self.iterable = tqdm(iterable, desc=desc, total=total)
         except Exception:
             self.iterable = iterable
 
@@ -198,6 +200,15 @@ def chars_from_font(font_path: Path, limit: int | None = None) -> list[str]:
         ttfont.close()
 
 
+def cmap_chars_from_font(font_path: Path) -> set[str]:
+    ttfont = open_ttfont(font_path)
+    try:
+        cmap = ttfont.getBestCmap() or {}
+        return {chr(codepoint) for codepoint in cmap if is_safe_character(chr(codepoint))}
+    finally:
+        ttfont.close()
+
+
 def foreground_bbox(img: Image.Image, bg: int) -> tuple[int, int, int, int] | None:
     arr = np.asarray(img.convert("L"))
     if bg >= 128:
@@ -224,11 +235,20 @@ def fit_to_square(img: Image.Image, size: int, pad: int, bg: int) -> Image.Image
     return out
 
 
+def get_pil_font(font_path: Path, font_size: int) -> ImageFont.FreeTypeFont:
+    key = (str(font_path), font_size)
+    font = _PIL_FONT_CACHE.get(key)
+    if font is None:
+        font = ImageFont.truetype(str(font_path), font_size)
+        _PIL_FONT_CACHE[key] = font
+    return font
+
+
 def render_font_char(font_path: Path, ch: str, size: int, pad: int) -> Image.Image | None:
     canvas_size = size * 4
     font_size = int(size * 1.65)
     try:
-        font = ImageFont.truetype(str(font_path), font_size)
+        font = get_pil_font(font_path, font_size)
     except Exception as exc:
         raise RuntimeError(f"Cannot load font {font_path}") from exc
 
@@ -261,6 +281,55 @@ def process_shufa_image(src: Path, size: int, pad: int, invert: bool) -> Image.I
     if invert:
         out = ImageOps.invert(out)
     return out
+
+
+def run_parallel(jobs: list[tuple], worker_fn, desc: str, workers: int, chunksize: int):
+    if workers <= 1 or len(jobs) <= 1:
+        for job in Progress(jobs, desc, total=len(jobs)):
+            yield worker_fn(job)
+        return
+
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        results = executor.map(worker_fn, jobs, chunksize=chunksize)
+        for result in Progress(results, desc, total=len(jobs)):
+            yield result
+
+
+def render_worker_count(args) -> int:
+    if args.render_workers is not None:
+        return max(1, args.render_workers)
+    cpu_count = os.cpu_count() or 2
+    return max(1, min(12, cpu_count // 2))
+
+
+def _render_content_job(job):
+    ch, font_paths, out_dir, size, pad = job
+    for raw_font_path in font_paths:
+        img = render_font_char(Path(raw_font_path), ch, size, pad)
+        if img is None:
+            continue
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        img.save(Path(out_dir) / f"{ch}.png")
+        return ch, True
+    return ch, False
+
+
+def _render_style_font_job(job):
+    ch, font_path, out_dir, size, pad = job
+    img = render_font_char(Path(font_path), ch, size, pad)
+    if img is None:
+        return ch, False
+    img.save(Path(out_dir) / f"{ch}.png")
+    return ch, True
+
+
+def _render_style_shufa_job(job):
+    ch, src_path, out_dir, size, pad, invert = job
+    img = process_shufa_image(Path(src_path), size, pad, invert=invert)
+    if img is None:
+        return ch, False
+    img.save(Path(out_dir) / f"{ch}.png")
+    return ch, True
 
 
 def choose_content_font(
@@ -384,20 +453,39 @@ def render_content_images(
     if not fallback_fonts:
         print("Warning: no Plangothic fallback fonts found.")
 
-    rendered: set[str] = set()
-    skipped = 0
-    for ch in Progress(chars, "render content"):
-        font_path = choose_content_font(ch, sources_by_char, source_fonts, fallback_fonts)
-        if font_path is None:
-            skipped += 1
-            continue
-        img = render_font_char(font_path, ch, args.size, args.padding)
-        if img is None:
-            skipped += 1
-            continue
-        img.save(content_dir / f"{ch}.png")
-        rendered.add(ch)
+    all_candidate_fonts = list(source_fonts.values()) + fallback_fonts
+    coverage_by_font = {font_path: cmap_chars_from_font(font_path) for font_path in all_candidate_fonts}
+    worker_count = render_worker_count(args)
+    print(f"Rendering content glyphs with {worker_count} process(es).")
 
+    jobs = []
+    for ch in chars:
+        preferred = list(DEFAULT_REGION_ORDER)
+        sources = sources_by_char.get(ch, set())
+        if "Shufa" in sources:
+            preferred = ["HK", *[r for r in DEFAULT_REGION_ORDER if r != "HK"]]
+        elif sources:
+            preferred = [r for r in DEFAULT_REGION_ORDER if r in sources] + [
+                r for r in DEFAULT_REGION_ORDER if r not in sources
+            ]
+
+        font_paths = []
+        for region in preferred:
+            font_path = source_fonts.get(region)
+            if font_path and ch in coverage_by_font.get(font_path, set()):
+                font_paths.append(str(font_path))
+        for font_path in fallback_fonts:
+            if ch in coverage_by_font.get(font_path, set()):
+                font_paths.append(str(font_path))
+        if font_paths:
+            jobs.append((ch, font_paths, str(content_dir), args.size, args.padding))
+
+    rendered: set[str] = set()
+    for ch, ok in run_parallel(jobs, _render_content_job, "render content", worker_count, args.render_chunksize):
+        if ok:
+            rendered.add(ch)
+
+    skipped = len(chars) - len(rendered)
     if skipped:
         print(f"Skipped {skipped} content glyph(s) because SourceHanSans/Plangothic rendered empty.")
     if len(rendered) < max(4, args.kshot):
@@ -413,6 +501,8 @@ def render_style_images(
 ) -> list[StyleSource]:
     train_dir.mkdir(parents=True, exist_ok=True)
     kept: list[StyleSource] = []
+    worker_count = render_worker_count(args)
+    print(f"Rendering style glyphs with {worker_count} process(es).")
 
     for source in Progress(sources, "render styles"):
         out_dir = train_dir / source.name
@@ -420,26 +510,28 @@ def render_style_images(
         chars = [ch for ch in source.chars if ch in valid_chars]
 
         if source.kind == "font":
-            for ch in chars:
-                img = render_font_char(source.path, ch, args.size, args.padding)
-                if img is None:
+            jobs = [(ch, str(source.path), str(out_dir), args.size, args.padding) for ch in chars]
+            results = run_parallel(jobs, _render_style_font_job, f"render {source.name}", worker_count, args.render_chunksize)
+            for _ch, ok in results:
+                if ok:
+                    source.rendered += 1
+                else:
                     source.skipped += 1
-                    continue
-                img.save(out_dir / f"{ch}.png")
-                source.rendered += 1
         else:
             image_by_char = {p.stem: p for p in image_files_in(source.path) if p.stem in chars}
+            jobs = []
             for ch in chars:
                 src = image_by_char.get(ch)
                 if src is None:
                     source.skipped += 1
                     continue
-                img = process_shufa_image(src, args.size, args.padding, invert=args.invert_shufa)
-                if img is None:
+                jobs.append((ch, str(src), str(out_dir), args.size, args.padding, args.invert_shufa))
+            results = run_parallel(jobs, _render_style_shufa_job, f"render {source.name}", worker_count, args.render_chunksize)
+            for _ch, ok in results:
+                if ok:
+                    source.rendered += 1
+                else:
                     source.skipped += 1
-                    continue
-                img.save(out_dir / f"{ch}.png")
-                source.rendered += 1
 
         if source.rendered >= args.kshot:
             kept.append(source)
@@ -760,6 +852,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--size", type=int, default=128, help="Glyph image size.")
     parser.add_argument("--padding", type=int, default=12, help="Glyph padding inside the square image.")
+    parser.add_argument("--render-workers", type=int, default=None, help="Parallel processes for glyph/image rendering. Default uses up to 12.")
+    parser.add_argument("--render-chunksize", type=int, default=16, help="Chunk size for parallel rendering jobs.")
     parser.add_argument("--invert-shufa", action="store_true", help="Invert Shufa images to black glyphs on white background.")
     parser.add_argument("--copy-validation", action="store_true", help="Copy validation mirrors instead of using directory symlinks.")
     parser.add_argument("--max-val-fonts", type=int, default=8, help="Number of mirrored validation style folders.")
