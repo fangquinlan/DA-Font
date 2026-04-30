@@ -29,6 +29,41 @@ except Exception:
     pass
 
 
+class FeatureSimilarityRow:
+    def __init__(self, features, index, target_uni):
+        self.features = features
+        self.index = index
+        self.target_uni = target_uni
+
+    def __getitem__(self, ref_uni):
+        target_idx = self.index.get(self.target_uni)
+        ref_idx = self.index.get(ref_uni)
+        if target_idx is None or ref_idx is None:
+            return 0.0
+        if target_idx == ref_idx:
+            return 1.0
+        return float(torch.dot(self.features[target_idx], self.features[ref_idx]))
+
+
+class FeatureSimilarity:
+    def __init__(self, path):
+        data = torch.load(path, map_location="cpu")
+        names = data["names"]
+        self.features = data["features"].float()
+        self.index = {name: idx for idx, name in enumerate(names)}
+
+    def __getitem__(self, target_uni):
+        return FeatureSimilarityRow(self.features, self.index, target_uni)
+
+
+def load_chars_similarity(sim_path):
+    sim_path = Path(sim_path)
+    if sim_path.suffix.lower() == ".pt":
+        return FeatureSimilarity(str(sim_path))
+    with open(sim_path, 'r') as file:
+        return json.load(file)
+
+
 def setup_args_and_config():
     """
     setup_args_and_configs
@@ -240,11 +275,9 @@ def train(args, cfg, ddp_gpu=0):
     trainer = Trainer(gen, disc, g_optim, d_optim, gen_scheduler, dis_scheduler,
                       logger, envaluator, cv_loaders, cfg)
 
-    # Load character similarity data
-    with open(cfg.sim_path, 'r+') as file:
-        chars_sim = file.read()
-
-    chars_sim_dict = json.loads(chars_sim) 
+    # Load character similarity data. Large prepared sets use compact
+    # normalized encoder features and compute only the requested pairs.
+    chars_sim_dict = load_chars_similarity(cfg.sim_path)
 
     # Start training
     trainer.train(trn_loader, st_step, cfg["iter"], component_objects, chars_sim_dict)

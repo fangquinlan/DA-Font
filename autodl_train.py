@@ -150,6 +150,7 @@ def check_dependencies() -> None:
         ("torchvision", None),
         ("sconf", "sconf"),
         ("cv2", "opencv-python"),
+        ("einops", "einops"),
     ]:
         require_module(module, package)
 
@@ -637,6 +638,12 @@ def load_content_encoder(device: str, vae_path: Path):
     return encoder
 
 
+def similarity_path(prepared_dir: Path, args) -> Path:
+    if args.full_similarity_json:
+        return (prepared_dir / "meta" / "all_char_similarity_unicode.json").resolve()
+    return (prepared_dir / "meta" / "content_similarity_features.pt").resolve()
+
+
 def write_similarity(content_dir: Path, sim_path: Path, vae_path: Path, args) -> None:
     import torch
     from torchvision import transforms
@@ -661,22 +668,33 @@ def write_similarity(content_dir: Path, sim_path: Path, vae_path: Path, args) ->
             batch_names.append(unicode_hex(path.stem))
             if len(batch_imgs) >= args.sim_batch_size:
                 tensor = torch.stack(batch_imgs).to(device)
-                feat = encoder(tensor).flatten(1)
+                feat = encoder(tensor)
+                if args.sim_pool_size > 0:
+                    feat = torch.nn.functional.adaptive_avg_pool2d(feat, (args.sim_pool_size, args.sim_pool_size))
+                feat = feat.flatten(1)
                 features.append(feat.detach().cpu())
                 names.extend(batch_names)
                 batch_imgs.clear()
                 batch_names.clear()
         if batch_imgs:
             tensor = torch.stack(batch_imgs).to(device)
-            feat = encoder(tensor).flatten(1)
+            feat = encoder(tensor)
+            if args.sim_pool_size > 0:
+                feat = torch.nn.functional.adaptive_avg_pool2d(feat, (args.sim_pool_size, args.sim_pool_size))
+            feat = feat.flatten(1)
             features.append(feat.detach().cpu())
             names.extend(batch_names)
 
     matrix = torch.cat(features, dim=0).float()
     matrix = torch.nn.functional.normalize(matrix, dim=1)
-    matrix_for_matmul = matrix.to(device) if device == "cuda" else matrix
     sim_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if not args.full_similarity_json:
+        print(f"Writing compact similarity features for {len(names)} glyphs...")
+        torch.save({"names": names, "features": matrix.half()}, str(sim_path))
+        return
+
+    matrix_for_matmul = matrix.to(device) if device == "cuda" else matrix
     print(f"Writing similarity JSON for {len(names)} glyphs...")
     with sim_path.open("w", encoding="utf-8") as fout:
         fout.write("{")
@@ -704,7 +722,7 @@ def write_config(config_path: Path, prepared_dir: Path, content_dir: Path, args)
         workers = max(1, min((os.cpu_count() or 2) - 1, 24))
 
     vae_path = (repo_root() / "pretrained_weights" / "VQ-VAE_Parms_chn_.pth").resolve()
-    sim_path = (prepared_dir / "meta" / "all_char_similarity_unicode.json").resolve()
+    sim_path = similarity_path(prepared_dir, args)
     work_dir = (repo_root() / "results" / args.task_name).resolve()
     data_path = (prepared_dir / "lmdb").resolve()
     data_meta = (prepared_dir / "meta" / "train.json").resolve()
@@ -766,10 +784,17 @@ def prepare(args) -> tuple[Path, Path]:
     train_dir = images_root / "train"
     val_dir = images_root / "val"
     config_path = prepared_dir / "autodl_config.yaml"
+    sim_path = similarity_path(prepared_dir, args)
 
     if prepared_dir.exists() and not args.force:
-        if (prepared_dir / "lmdb").exists() and (prepared_dir / "meta" / "train.json").exists() and config_path.exists():
-            print(f"Reusing prepared data at {prepared_dir}. Use --force to rebuild.")
+        has_lmdb_meta = (prepared_dir / "lmdb").exists() and (prepared_dir / "meta" / "train.json").exists()
+        has_rendered_content = content_dir.exists() and any(content_dir.glob("*.png"))
+        if has_lmdb_meta and has_rendered_content:
+            print(f"Reusing rendered images/LMDB/meta at {prepared_dir}. Use --force to rebuild.")
+            vae_path = (root / "pretrained_weights" / "VQ-VAE_Parms_chn_.pth").resolve()
+            if not sim_path.exists():
+                write_similarity(content_dir, sim_path, vae_path, args)
+            write_config(config_path, prepared_dir, content_dir, args)
             return prepared_dir, config_path
 
     if prepared_dir.exists():
@@ -788,7 +813,7 @@ def prepare(args) -> tuple[Path, Path]:
     build_lmdb_and_meta(prepared_dir, content_dir, train_dir, val_dir, args)
 
     vae_path = (root / "pretrained_weights" / "VQ-VAE_Parms_chn_.pth").resolve()
-    sim_path = (prepared_dir / "meta" / "all_char_similarity_unicode.json").resolve()
+    sim_path = similarity_path(prepared_dir, args)
     write_similarity(content_dir, sim_path, vae_path, args)
     write_config(config_path, prepared_dir, content_dir, args)
 
@@ -878,7 +903,9 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--sim-batch-size", type=int, default=128)
     parser.add_argument("--sim-row-chunk", type=int, default=128)
+    parser.add_argument("--sim-pool-size", type=int, default=4, help="Pool encoder features before similarity. 4 is compact; 0 keeps full features.")
     parser.add_argument("--cpu-similarity", action="store_true", help="Compute similarity on CPU even if CUDA is available.")
+    parser.add_argument("--full-similarity-json", action="store_true", help="Write the original full NxN similarity JSON. Not recommended for large character sets.")
 
     parser.add_argument("--limit-fonts", type=int, default=None, help="Testing only: limit number of style sources.")
     parser.add_argument("--limit-chars-per-font", type=int, default=None, help="Testing only: limit glyphs per source.")
