@@ -39,7 +39,8 @@ class Evaluator:
         self.content_font = content_font  # Font used for content representation
         self.use_half = use_half  # Whether to use half-precision
         self.size = cfg.input_size  # Input image size
-        self.eval_image_dir = Path(cfg.work_dir) / "images" / cfg.unique_name
+        unique_name = cfg.get("unique_name", cfg.get("name", "inference"))
+        self.eval_image_dir = Path(cfg.work_dir) / "images" / unique_name
         self.eval_image_dir.mkdir(parents=True, exist_ok=True)
 
     
