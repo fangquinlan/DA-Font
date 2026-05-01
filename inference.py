@@ -10,7 +10,7 @@ import os
 from sconf import Config
 import shutil
 from build_dataset.build_meta4train import save_lmdb
-from train import setup_transforms, load_pretrain_vae_model
+from train import setup_transforms, load_pretrain_vae_model, load_chars_similarity
 from utils import Logger
 from datasets.lmdbutils import (load_lmdb, load_json, read_data_from_lmdb)
 from model import generator_dispatch
@@ -214,9 +214,7 @@ def eval_ckpt(args, cfg, avail, target_root):
     bs_component_embeddings = get_codebook_detach(component_objects, cfg["batch_size"]) 
 
     # Load character similarity data
-    with open(cfg.sim_path, 'r+') as file:  
-        chars_sim = file.read()
-    chars_sim_dict = json.loads(chars_sim) 
+    chars_sim_dict = load_chars_similarity(cfg.sim_path)
 
     # Run evaluation and save results
     logger.info("Save CV results to {} ...".format(img_dir))
@@ -226,7 +224,7 @@ def eval_ckpt(args, cfg, avail, target_root):
                                              save_dir=target_root, reduction='mean') 
 
 
-def get_codebook_detach(component_embeddings, batch_size):  
+def get_codebook_detach(component_embeddings, batch_size):
     """Prepare component embeddings for batch processing
     Args:
         component_embeddings: Learned component embeddings
@@ -240,7 +238,17 @@ def get_codebook_detach(component_embeddings, batch_size):
     component_objects = component_objects.unsqueeze(0)  
     component_objects = component_objects.repeat(batch_size, 1, 1)  
 
-    return component_objects.detach() 
+    return component_objects.detach()
+
+
+def parse_chars_arg(chars_arg):
+    if not chars_arg:
+        return None
+    chars = []
+    for part in chars_arg.replace(",", "").replace(" ", "").replace("\n", ""):
+        if part and part not in chars:
+            chars.append(part)
+    return [hex(ord(ch))[2:].upper() for ch in chars]
 
 
 if __name__ == "__main__":
@@ -252,6 +260,8 @@ if __name__ == "__main__":
     parser.add_argument("--content_font", help="path to content font")
     parser.add_argument("--img_path", help="path of the your test img directory.")
     parser.add_argument("--saving_root", help="saving directory.")
+    parser.add_argument("--chars", default=None, help="Optional characters to generate, e.g. 永和九成宫.")
+    parser.add_argument("--max_chars", type=int, default=None, help="Optional cap for quick inference smoke tests.")
 
     args = parser.parse_args()
     cfg = Config(*args.config_paths, default="./cfgs/defaults.yaml")
@@ -268,8 +278,19 @@ if __name__ == "__main__":
     print(target_root)
 
     # Load character mapping
-    with open(cfg.all_content_json, 'r') as f: 
+    with open(cfg.all_content_json, 'r') as f:
         cr_mapping = json.load(f)
+    requested_unis = parse_chars_arg(args.chars)
+    if requested_unis:
+        cr_set = set(cr_mapping)
+        missing = [uni for uni in requested_unis if uni not in cr_set]
+        if missing:
+            print("warning: requested chars missing from content set:", missing)
+        cr_mapping = [uni for uni in requested_unis if uni in cr_set]
+    if args.max_chars:
+        cr_mapping = cr_mapping[:args.max_chars]
+    if not cr_mapping:
+        raise ValueError("No characters left for inference.")
 
     # create directory
     os.makedirs(target_root, exist_ok=True) 
