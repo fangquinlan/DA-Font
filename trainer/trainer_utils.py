@@ -2,6 +2,14 @@ import torch
 import torch.nn as nn
 
 
+def trusted_torch_load(path, **kwargs):
+    """Load local checkpoints saved by this training run across PyTorch versions."""
+    try:
+        return torch.load(path, weights_only=False, **kwargs)
+    except TypeError:
+        return torch.load(path, **kwargs)
+
+
 def has_bn(model):
     for m in model.modules():
         if isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
@@ -30,7 +38,7 @@ def load_checkpoint(path, gen, disc, g_optim, d_optim, g_scheduler, d_scheduler)
     """
     load_ckeckpoint
     """
-    ckpt = torch.load(path)
+    ckpt = trusted_torch_load(path)
 
     gen.load_state_dict(ckpt['generator'])
     g_optim.load_state_dict(ckpt['optimizer'])

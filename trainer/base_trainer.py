@@ -375,7 +375,7 @@ class BaseTrainer:
 
             if self.best_loss == float("inf") and best_ckpt_path.exists():
                 try:
-                    best_ckpt = torch.load(str(best_ckpt_path), map_location="cpu")
+                    best_ckpt = trusted_torch_load(str(best_ckpt_path), map_location="cpu")
                     self.best_loss = best_ckpt.get("best_loss", best_ckpt.get("loss", self.best_loss))
                 except Exception:
                     self.best_loss = float("inf")

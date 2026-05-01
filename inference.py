@@ -19,6 +19,7 @@ import torch
 from evaluator import Evaluator
 from pathlib import Path
 from datasets import get_fixedref_loader
+from trainer import trusted_torch_load
 
 
 def getCharList(root):
@@ -171,7 +172,7 @@ def eval_ckpt(args, cfg, avail, target_root):
     gen = g_cls(1, cfg.C, 1, cfg, **g_kwargs)   
 
     # Load model weights
-    weight = torch.load(args.weight)  
+    weight = trusted_torch_load(args.weight, map_location="cpu")
 
     if "generator_ema" in weight:  
         weight = weight["generator_ema"]
